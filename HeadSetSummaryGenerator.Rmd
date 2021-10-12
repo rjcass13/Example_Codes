@@ -1,0 +1,464 @@
+---
+title: "HeadSetSportsSummaryGenerator"
+output: html_document
+---
+
+# README: 
+# HOW TO USE THIS PROGRAM
+
+#################################################
+# STARTUP
+## SIMPLIFIED: 
+- Go to the drop down menu next to the run button at the top right of the code window
+- Click on "Restart R and Run All Chunks"
+- Continue to "DURING THE PROGRAM"
+
+## STEPS 
+### Step 1: Run the Libraries chunk
+- Press the green arrow at the top right of the chunk called Libraries
+
+### Step 2: Run the Functions chunk
+- Press the green arrow at the top right of the chunk called Functions
+
+### Step 3: Run the Main chunk
+- Press the green arrow at the top right of the chunk called Main
+- Continue to "DURING THE PROGRAM"
+#################################################
+
+# DURING THE PROGRAM
+- A file selection box will pop up. Navigate to and select the file you want to clean. 
+- The program will performing all the data cleaning
+- A box will pop up asking for you to input the team name
+  - Enter the team name without spaces
+  - Whatever name you enter will be the start of the file name, for example
+  - Entering "SpruceGrove" results in a final file name of "SpruceGroveCleaned.xls"
+- A final box will pop up asking if you have another file to clean
+  - Select an option by clicking on the option you want and clicking "Ok"
+    - If you select "Yes", the program will return to the start of the "DURING THE PROGRAM"
+    - If you select "No", the program will end
+
+```{r Libraries, message = FALSE}
+library(here)
+library(tidyverse)
+library(xlsx)
+library(readxl)
+library(lubridate)
+library(rstudioapi)
+library(svDialogs)
+```
+
+
+```{r Functions}
+# Generate the overall data summary (first sheet of the document). 
+# Returns the summary dataset
+GenerateOverallSummary <- function(FileLocation) {
+  # Read in the first sheet of the file which has the overall summaries of the player usage
+  data <- read.xlsx(FileLocation, header = TRUE, sheetIndex = 1, startRow = 7) %>%
+    # Split the task count box into several columns by activity
+    separate(col = 2, into = c("Assessments", "Weekly_Updates", "WOWs", "Events", "Pre_Competition_Events", "Debriefs", "Videos"), sep = '\\|') %>% 
+    # Extract the numeric value for activities completed by removing the text and saving the activity type as the column header
+    mutate(Assessments = as.numeric(gsub("Assessments:", "", Assessments))) %>%
+    mutate(Weekly_Updates = as.numeric(gsub("Weekly Updates:", "", Weekly_Updates))) %>%
+    mutate(WOWs = as.numeric(gsub("WOWs:", "", WOWs))) %>%
+    mutate(Events = as.numeric(gsub("Events:", "", Events))) %>%
+    mutate(Pre_Competition_Events = as.numeric(gsub("Pre Competition Tasks: ", "", Pre_Competition_Events))) %>%
+    mutate(Debriefs = as.numeric(gsub("Debriefs:", "", Debriefs))) %>%
+    mutate(Videos = as.numeric(gsub("Videos: ", "", Videos)))
+  
+  # Return the overall performance summary
+  return(data)
+}
+
+
+# Generate the long data set.
+# Returns the long data set
+GenerateLongDataSet <- function(FileLocation){
+  # Read in each of the personal performance sheets and combine into one long list
+  # The sheet names are also the player names
+  SheetNames <- excel_sheets(FileLocation)
+  
+  # A counter just to keep track of how many sheets actually contain data.
+  # It is used to identify the first usable sheet encountered
+  GoodSheets <- 0
+  
+  # Read each of the sheets and combine them into a long list
+  # We skip the first sheet since that contains the summary data
+  for(sheet in 2:length(SheetNames)) {
+    # Read in the whole sheet to check how many rows it has
+    RowCheck <- read.xlsx(FileLocation, sheetIndex = sheet, headers = TRUE)
+    
+    # Check if the sheet has anything on it. If not, skip it
+    if(length(RowCheck) == 0){
+      next
+    }
+    
+    # If the sheet has less than 6 rows it means the player didn't do any activities. Skip that sheet.
+    if(dim(RowCheck)[1] < 6){
+      next
+    }
+    
+    # Check if this is the first sheet with usable data we have encountered
+    # If so, generate the long dataset. 
+    if(GoodSheets == 0){
+    #  Read the sheet and input the column headers along with the player data
+      DataLong <- read.xlsx(FileLocation, sheetIndex = sheet, startRow = 9) %>%
+        head(-1) %>%
+        add_column(Player = SheetNames[sheet], .before = "Date")
+      GoodSheets <- GoodSheets + 1
+      next
+    }
+    
+    # For all other sheets of players that did something, input the data to a temporary dataset
+    SheetData <- read.xlsx(FileLocation, sheetIndex = sheet, startRow = 9) %>%
+      head(-1) %>%
+      add_column(Player = SheetNames[sheet], .before = "Date")
+    
+    # Append the new data to the end of the full data set
+    DataLong <- DataLong %>%
+      rbind(SheetData)
+    
+    # Increment the number of sheets that had usable data
+    GoodSheets <- GoodSheets + 1
+  }
+  
+  # Convert the character dates to date data types
+  DataLong$Date <- as.Date(DataLong$Date, "%m/%d/%Y")
+  
+  # Return the long data set
+  return(DataLong)
+}
+
+
+# Calculates the time someone used HeadSet. 
+# Returns a list with [[Months], [Days]].
+# Time used is determined as time between the first and last assessment
+TimeUsed <- function(Name) {
+  # Get all the rows for the player
+  PlayerInfo <- DataLong[which(DataLong$Player == Name), ]
+  Dates <- PlayerInfo[which(PlayerInfo$Type == "assessment"), 2]
+  # If they don't have 2 assessments, I label the time used as 0
+  if(length(Dates) < 2) {
+    return(list(0, 0))
+  }
+  # CALCULATE DAYS EACH PERSON USED THE PROGRAM
+  # Start date is the first assessment date
+  StartDate <- ISOdate(year(Dates[1]), month(Dates[1]), day(Dates[1]))
+  # End date is the last assessment date
+  EndDate <- ISOdate(year(Dates[length(Dates)]), month(Dates[length(Dates)]), day(Dates[length(Dates)]))
+  # Find the days used
+  DaysUsed <- as.numeric(EndDate - StartDate)
+  # Find the months used
+  MonthsUsed <- round(DaysUsed/30)
+  # Combine days and months into a list
+  TimeUsed <- list(DaysUsed, MonthsUsed)
+  # Return the list of days used and months used
+  return(TimeUsed)
+}  
+
+
+# Generate the dataset of total activities completed by each participant
+# Returns the TotalActivities dataset
+GenerateTotalActivities <- function(SummaryDataSet){
+  # Pick the columns we want to include
+  Summary <- SummaryDataSet %>% 
+    select(c("Member.Name":"Videos"))
+  
+  # Rename the member column to "Player"
+  colnames(Summary)[1] <- "Player"
+  
+  # Declare the vectors used to store time usage data
+  MonthsUsed <- integer(length(Summary$Player))
+  DaysUsed <- integer(length(Summary$Player))
+  
+  # Assign the time used for each player in respective vectors
+  for (n in 1:length(Summary$Player)) {
+    Times <- TimeUsed(Summary$Player[n])
+    MonthsUsed[n] <- Times[[2]]
+    DaysUsed[n] <- Times[[1]]
+  }
+  
+  # Add the months and days used vectors to the descriptive dataset
+  Summary <- Summary %>% 
+    mutate(Months = MonthsUsed) %>% 
+    mutate(Days = DaysUsed)
+  
+  # Return the descriptive summary data set
+  return(Summary)
+}
+
+
+# Generate the dataset of activities completed before each assessment by each participant 
+# Returns the ActivitiesPerAssessment dataset 
+GenerateActivitiesPerAssessment <- function(LongDataSet, SummaryData) {
+  
+  ###############################################################################################
+  # Make the new data set and establish the general structure
+  
+  # Generate new dataset
+  Specifics <- LongDataSet[which(LongDataSet$Type == "assessment"), ] %>% 
+    # Keep only the player name, the assessment date, and the scores
+    select(Player, Date, Awareness:Motivation, Total.Points) %>%
+    # Add the new columns for activities completed before each assessment
+    mutate(Number_of_WOWs = 0, Number_of_Weeklys = 0, Number_of_Videos = 0, Number_of_Events = 0, Number_of_Debriefs = 0, Number_of_PreComp = 0) %>% 
+    # Change the Total.Points column to be the assessment score and relocate it to be right after the date
+    mutate(Assessment_Score = Total.Points, .after = "Date") %>%
+    select(-Total.Points) %>%
+    # Add a new column for the individual player assessment number
+    add_column(Assessment_Number = 0, .after = "Player") 
+  
+  # Keep only the rows of players for which we have data according to the previously generated descriptive summary
+  Specifics <- Specifics[which(Specifics$Player %in% SummaryData$Player), ]
+  
+  ################################################################################################
+  # Find the tasks before each assessment
+  
+  # For each user (loop 1) we will go through each task (loop 2) and see how many of each event were completed before an assessment
+  
+  # Use this to keep track of the total assessments, and thus the row in the data set the counts should go in
+  AssessmentCount <- 0
+  for (n in 1:length(SummaryData$Player)) {
+    # Get the player name
+    PlayerName <- SummaryData$Player[n]
+    # Get all tasks that player completed
+    PlayerTasks <- LongDataSet[which(LongDataSet$Player == PlayerName), 3]
+    # If they performed no tasks, skip them
+    if(length(PlayerTasks) == 0) {
+      next
+    }
+    # Set each task counter to 0
+    WOWs = 0
+    Weeklys = 0
+    Videos = 0
+    Events = 0
+    Debriefs = 0
+    PreComp = 0
+    PlayerAssessmentCounter <- 0
+    
+    # Go through each task, incrementing the correct task counter
+    # When it reaches an assessment it will put each task counter into the data set then reset the counters
+    for (m in 1:length(PlayerTasks)) {
+      if(PlayerTasks[m] == "wow") {
+        WOWs = WOWs + 1
+        }
+      else if(PlayerTasks[m] == "weekly") {
+        Weeklys = Weeklys + 1
+        }
+      else if(PlayerTasks[m] == "video") {
+        Videos = Videos + 1
+        }
+      else if(PlayerTasks[m] == "event") {
+        Events = Events + 1
+        }
+      else if(PlayerTasks[m] == "debrief") {
+        Debriefs = Debriefs + 1
+        }
+      else if(PlayerTasks[m] == "Pre Competition Task") {
+        PreComp = PreComp + 1
+      }
+      # When the task is an assessment, enter in the data set how many of each task was completed
+      else if(PlayerTasks[m] == "assessment") {
+        AssessmentCount = AssessmentCount + 1
+        PlayerAssessmentCounter = PlayerAssessmentCounter + 1
+        # Assign the total counts to the data set
+        Specifics$Number_of_WOWs[AssessmentCount] <- WOWs
+        Specifics$Number_of_Weeklys[AssessmentCount] <- Weeklys
+        Specifics$Number_of_Videos[AssessmentCount] <- Videos
+        Specifics$Number_of_Events[AssessmentCount] <- Events
+        Specifics$Number_of_Debriefs[AssessmentCount] <- Debriefs
+        Specifics$Number_of_PreComp[AssessmentCount] <- PreComp
+        Specifics$Assessment_Number[AssessmentCount] <- PlayerAssessmentCounter
+        # Reset each task counter
+        WOWs = 0
+        Weeklys = 0
+        Videos = 0
+        Events = 0
+        Debriefs = 0
+        PreComp = 0
+      }
+      # If there's a data error, it'll just skip it
+      else {
+        next
+      }
+    }
+  }
+  
+  # Return the descriptive specifics data set
+  return(Specifics)
+}
+
+
+# Generate the dataset of activities completed before each game debrief by each participant 
+# Returns the ActivitiesPerGameDebrief dataset 
+GenerateActivitiesPerGameDebrief <- function(LongDataSet, SummaryData) {
+  
+  ###############################################################################################
+  # Make the new data set and establish the general structure
+  
+  # Generate new dataset
+  Specifics <- LongDataSet[which(LongDataSet$Type == "debrief" & substr(LongDataSet$Description, 1, 4) == "Game"), ] %>% 
+    # Keep only the player name, the assessment date, and the scores
+    select(Player, Date, Total.Points, ) %>%
+    # Add the new columns for activities completed before each assessment
+    mutate(Number_of_Assessments = 0,Number_of_WOWs = 0, Number_of_Weeklys = 0, Number_of_Videos = 0, Number_of_Events = 0,  Number_of_PreComp = 0) %>% 
+    # Change the Total.Points column to be the game debrief score and relocate it to be right after the date
+    mutate(Game_Debrief_Score = Total.Points, .after = "Date") %>%
+    select(-Total.Points) %>%
+    # Add a new column for the individual player game debrief number
+    add_column(Game_Debrief_Number = 0, .after = "Date") 
+  
+  # Keep only the rows of players for which we have data according to the previously generated descriptive summary
+  Specifics <- Specifics[which(Specifics$Player %in% SummaryData$Player), ]
+  
+  ################################################################################################
+  # Find the tasks before each assessment
+  
+  # For each user (loop 1) we will go through each task (loop 2) and see how many of each event were completed before an assessment
+  
+  # Use this to keep track of the total assessments, and thus the row in the data set the counts should go in
+  TotalGameDebriefCount <- 0
+  for (n in 1:length(SummaryData$Player)) {
+    # Get the player name
+    PlayerName <- SummaryData$Player[n]
+    # Get all tasks that player completed
+    PlayerTasks <- LongDataSet[which(LongDataSet$Player == PlayerName), 3]
+    TaskDescriptions <- LongDataSet[which(LongDataSet$Player == PlayerName), 4]
+    # If they performed no tasks, skip them
+    if(length(PlayerTasks) == 0) {
+      next
+    }
+    # Set each task counter to 0
+    Assessments = 0
+    WOWs = 0
+    Weeklys = 0
+    Videos = 0
+    Events = 0
+    PreComp = 0
+    DebriefPractice = 0
+    PlayerGameDebriefCounter <- 0
+    
+    # Go through each task, incrementing the correct task counter
+    # When it reaches an assessment it will put each task counter into the data set then reset the counters
+    for (m in 1:length(PlayerTasks)) {
+      if(PlayerTasks[m] == "assessment") {
+        Assessments = Assessments + 1
+      }
+      else if(PlayerTasks[m] == "wow") {
+        WOWs = WOWs + 1
+        }
+      else if(PlayerTasks[m] == "weekly") {
+        Weeklys = Weeklys + 1
+        }
+      else if(PlayerTasks[m] == "video") {
+        Videos = Videos + 1
+        }
+      else if(PlayerTasks[m] == "event") {
+        Events = Events + 1
+        }
+      else if(PlayerTasks[m] == "Pre Competition Task") {
+        PreComp = PreComp + 1
+      }
+      else if((PlayerTasks[m] == "debrief") & (substr(TaskDescriptions[m], 1, 8) == "Practice")) {
+        DebriefPractice = DebriefPractice + 1
+      }
+      # When the task is an assessment, enter in the data set how many of each task was completed
+      else if((PlayerTasks[m] == "debrief") & (substr(TaskDescriptions[m], 1, 4) == "Game")) {
+        TotalGameDebriefCount = TotalGameDebriefCount + 1
+        PlayerGameDebriefCounter = PlayerGameDebriefCounter + 1
+        # Assign the total counts to the data set
+        Specifics$Number_of_Assessments[TotalGameDebriefCount] <- Assessments
+        Specifics$Number_of_WOWs[TotalGameDebriefCount] <- WOWs
+        Specifics$Number_of_Weeklys[TotalGameDebriefCount] <- Weeklys
+        Specifics$Number_of_Videos[TotalGameDebriefCount] <- Videos
+        Specifics$Number_of_Events[TotalGameDebriefCount] <- Events
+        Specifics$Number_of_PreComp[TotalGameDebriefCount] <- PreComp
+        Specifics$Number_of_Debrief_Practices[TotalGameDebriefCount] <- DebriefPractice
+        Specifics$Game_Debrief_Number[TotalGameDebriefCount] <- PlayerGameDebriefCounter
+        # Reset each task counter
+        Assessments = 0
+        WOWs = 0
+        Weeklys = 0
+        Videos = 0
+        Events = 0
+        PreComp = 0
+        DebriefPractice = 0
+      }
+      # If there's a data error, it'll just skip it
+      else {
+        next
+      }
+    }
+  }
+  
+  # Return the descriptive specifics data set
+  return(Specifics)
+}
+```
+
+
+```{r Main}
+repeat{
+  # Insert the file location here
+  FileLocation <- selectFile(caption = "Select the HeadSet team data file", 
+                     filter = "XLS Files (*.xls)", 
+                     path = here())
+  
+  # I'm not sure if the selectFile function is compatible across platforms (it works on Windows)
+  # If you have issues picking the file, comment out the selectFile() line and uncomment the one below
+  # Insert the file path to the file you want to evaluate
+  # FileLocation <- here("Spruce Grove Saints Junior Hockey_Overall Points_09_01_2020_05_29_2021.xls")
+  
+  # Generate the overall summary dataset
+  DataSummary <- GenerateOverallSummary(FileLocation)
+  
+################################################################################
+###################### GENERATE THE DATASETS FOR THE FILE ######################
+################################################################################
+  
+  # Generate the long data set with all players that performed at least 1 activity. 
+  # This is the complete list of activities performed by each player
+  DataLong <- GenerateLongDataSet(FileLocation)
+  
+  # Generate the Total Activities dataset
+  # This is the summary of each player (how many of each task they completed and the time they used the program)
+  TotalActivities <- GenerateTotalActivities(DataSummary)
+  
+  # Generate the Activities per Assessment dataset
+  # This is the data set that shows how many of each task was completed before each assessment, and the assessment scores
+  ActivitiesPerAssessment <- GenerateActivitiesPerAssessment(DataLong, TotalActivities)
+  
+  # Generate the Activities per Game Debrief dataset
+  # This is the data set that shows how many of each task was completed before each game debrief, and the debrief scores
+  ActivitiesPerGameDebrief <- GenerateActivitiesPerGameDebrief(DataLong, TotalActivities)
+  
+################################################################################
+  
+  # This gets the team name from the user and will make the entered team name the file name
+  teamName <- dlgInput("Enter the team name (no spaces). This will be part of the file name.", Sys.info()["user"])$res
+  FileName <- paste(teamName, "Cleaned.xls", sep = "")
+  
+  
+  
+  # This writes the generated data sets to one excel file on different sheets
+  write.xlsx(TotalActivities, FileName, sheetName = "Total Activities", row.names = FALSE, showNA = FALSE)
+  write.xlsx(ActivitiesPerAssessment, FileName, sheetName = "Activities per Assessment", row.names = FALSE, append = TRUE, showNA = FALSE)
+  write.xlsx(ActivitiesPerGameDebrief, FileName, sheetName = "Activities per Game Debrief", row.names = FALSE, append = TRUE, showNA = FALSE)
+  write.xlsx(DataLong, FileName, sheetName = "Long Dataset", row.names = FALSE, append = TRUE, showNA = FALSE)
+
+  
+  
+  # This checks whether or not the user wants to clean another dataset
+  # If the response is yes, the main chunk will repeat
+  # If the response is no (or anything else), then the code will end
+  AnotherFile <- dlg_list(choices = c("No", "Yes"), title = "Another file?")$res
+  if(AnotherFile == "Yes") {
+    next
+  }
+  else {
+    break
+  }
+}
+```
+
+
+
+

@@ -1,0 +1,101 @@
+---
+title: "OverallDataCondenser"
+output: html_document
+---
+
+### READ ME:
+
+# This program works best if all the file you wish to condense are in one directory. 
+# The way the file selection works, you can only select files from one directory at a time, so if you want to combine data from multiple folders, 
+#     you'll have to run this multiple times. It's easiest just to copy/move the individual data files into one folder so you can combine them all in one go.
+
+
+```{r Libraries, message=FALSE}
+library(tcltk)
+library(tidyverse)
+library(xlsx)
+library(svDialogs)
+```
+
+
+
+```{r CombineData}
+####### READ ME #########
+# Choose all the files to condense
+# If you are combining a "pre-condensed" list and other files, put the "pre-condensed" file first
+#########################
+file_list <- tk_choose.files()
+
+# Condense the files
+first_file = TRUE
+for(file in file_list) {
+  
+  ######### ONLY APPLIES TO FIRST FILE EACH USE ##########
+  # If it's the first file, generate the overall condensed data sets
+  if (first_file) {
+    # Ge the summary and specifics data
+    summary <- read.xlsx(file, sheetIndex = 1)
+    assessments <- read.xlsx(file, sheetIndex = 2)
+    gameDebriefs <- read.xlsx(file, sheetIndex = 3)
+    
+    # If the first file is the condensed file set, just make that the base condensed data set
+    if (colnames(summary)[1] == "Team_Name") {
+      condensed_summary <-  summary
+      condensed_assessments <- assessments
+      condensed_game_debriefs <- gameDebriefs
+      next
+    }
+    
+    # If the first file is just a cleaned dataset (not the condensed one)
+    # Extract the team name from the file name
+    team_name <- sub("Cleaned.*", "", basename(file))
+    # If the first file is an uncondensed dataset, make the condensed datasets
+    condensed_summary <-  summary %>% 
+      add_column(Team_Name = team_name, .before = "Player")
+    # Make new activities per assessments dataset
+    condensed_assessments <- assessments %>% 
+      add_column(Team_Name = team_name, .before = "Player")
+    # Make new activities per game debrief dataset
+    condensed_game_debriefs <- gameDebriefs %>% 
+      add_column(Team_Name = team_name, .before = "Player")
+    # Mark that the first file has been used
+    first_file <- FALSE
+    next
+  }
+  #################################################
+  
+  
+  ##### ALL OTHER ITERATIONS ###############
+  
+  # For all other files, make new data sets and combine them with the overall condensed set
+  # Extract the team name from the file name
+  team_name <- sub("Cleaned.*", "", basename(file))
+  # Make new summary data set
+  new_summary <- read.xlsx(file, sheetIndex = 1) %>%
+    add_column(Team_Name = team_name, .before = "Player")
+  # Make new activities per assessment dataset
+  new_assessments <- read.xlsx(file, sheetIndex = 2) %>%
+    add_column(Team_Name = team_name, .before = "Player")
+  # Make new activities per game debrief dataset
+  new_game_debriefs <- read.xlsx(file, sheetIndex = 3) %>%
+    add_column(Team_Name = team_name, .before = "Player")
+  
+  # Combine the new datasets with the overall condensed set
+  condensed_summary <- condensed_summary %>%
+    rbind(new_summary)
+  condensed_assessments <- condensed_assessments %>%
+    rbind(new_assessments)
+  condensed_game_debriefs <- condensed_game_debriefs %>%
+    rbind(new_game_debriefs)
+}
+
+
+# This gets the file name from the user
+FileName <- dlgInput("Enter the file name for the condensed data (ie. CondensedData): ", Sys.info()["user"])$res
+FileName <- paste(FileName, ".xls", sep = "")
+# Write the datasets to a new .xls file
+write.xlsx(condensed_summary, FileName, sheetName = "Summary", row.names = FALSE, showNA = FALSE)
+write.xlsx(condensed_assessments, FileName, sheetName = "Activities per Assessment", row.names = FALSE, append = TRUE, showNA = FALSE)
+write.xlsx(condensed_game_debriefs, FileName, sheetName = "Activites per Game Debrief", row.names = FALSE, append = TRUE, showNA = FALSE)
+```
+

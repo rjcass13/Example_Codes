@@ -1,0 +1,215 @@
+---
+title: "HeadSet WebScraper"
+author: "RJ Cass"
+date: "6/2/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# README:  
+
+This program is made to assist in pulling data from the team websites. It should be straightforward to adjust for different teams. 
+
+For Spring Grove: 
+-Input the list of URL's (manually enter them, or use an excel spreadsheet or something with all of them saved)
+-Make sure the list of players who use HeadSet is up to date
+
+For other teams:
+-Check the above (list of URL's and Players)
+-Adjust the html table reading functions. The info will likely be stored in differently numbered tables, etc.
+-Adjust the column names when retrieving data from the website
+-Adjust any data manipulation conducted after data retrieval
+
+
+```{r Libraries}
+library(tidyverse)
+library(rvest)
+library(stringr)
+library(here)
+```
+
+```{r Lists}
+# List of URLs to extract data from
+URLList <- read.table(here("URLList.txt"))
+PlayerList <- read.table(here("PlayerList.txt")) %>% 
+  unite(Name, V1:V2, sep = " ", remove = TRUE, na.rm = TRUE)
+```
+
+```{r Helper_Functions}
+# Determine if Spruce Grove is the home team or not
+HomeTeam <- function(tables){
+  Team <- tables %>%
+  # Choose, from all the tables, which one we want
+  # The . puts the pipe operating data set in front of the table number
+  .[2] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]]
+
+  # Determine if Spruce Grove is Home or Away  
+  # If the chosen cell contains the Spruce Grove Saints, then they are the away team
+  if (Team[2, 1] == "Spruce Grove Saints"){
+    return(FALSE)
+  }
+  else {
+    return(TRUE)
+  }
+}
+# Return player stats tibble when Spruce Grove is home
+HomePlayerStats <- function(tables){
+  HomePlayerStats <- tables %>%
+  # Home team player stats are in table 10 
+  .[length(tables) - 2] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]] %>%
+  # Remove the first two rows
+  slice(c(-1, -2)) %>%
+  # Rename the columns
+  rename_all(~c("#", "Player", "G", "A", "PTS", "+/-", "SH", "PIM")) %>%
+  # Make the dataset a tibble
+  as_tibble()
+  # Return the table of player stats
+  return(HomePlayerStats)
+}
+# Return goalie stats tibble when Spruce Grove is home
+HomeGoalieStats <- function(tables){
+  HomeGoalieStats <- tables %>%
+  # Choose, from all the tables, which one we want
+  # Home team goalie stats are in table 12
+  .[length(tables) - 1] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]] %>%
+  # Remove the first two rows
+  slice(c(-1, -2)) %>%
+  # Rename the columns
+  rename_all(~c("#", "Player", "Min", "SH", "SV")) %>%
+  # Make the dataset a tibble
+  as_tibble()
+  
+  # Remove any extra info after the goalie's name
+  HomeGoalieStats$Player <- sub("^(\\S*\\s+\\S+).*", "\\1", HomeGoalieStats$Player)
+  # Return the table fo the goalie stats
+  return(HomeGoalieStats)
+}
+# Return player stats tibble when Spruce Grove is away
+AwayPlayerStats <- function(tables){
+  AwayPlayerStats <- tables %>%
+  # Away team player stats are in table 11 
+  .[length(tables) - 4] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]] %>%
+  # Remove the first two rows
+  slice(c(-1, -2)) %>%
+  # Rename the columns
+  rename_all(~c("#", "Player", "G", "A", "PTS", "+/-", "SH", "PIM")) %>%
+  # Make the dataset a tibble
+  as_tibble()
+  # Return the table of player stats
+  return(AwayPlayerStats)
+}
+# Return goalie stats tibble when Spruce Grove is away
+AwayGoalieStats <- function(tables){
+  AwayGoalieStats <- tables %>%
+  # Choose, from all the tables, which one we want
+  # Home team goalie stats are in table 12
+  .[length(tables) - 3] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]] %>%
+  # Remove the first two rows
+  slice(c(-1, -2)) %>%
+  # Rename the columns
+  rename_all(~c("#", "Player", "Min", "SH", "SV")) %>%
+  # Make the dataset a tibble
+  as_tibble()
+  
+  # Remove any extra info after the goalie's name
+  AwayGoalieStats$Player <- sub("^(\\S*\\s+\\S+).*", "\\1", AwayGoalieStats$Player)
+  # Return the table fo the goalie stats
+  return(AwayGoalieStats)
+}
+# Return the date of the match played
+MatchDate <- function(tables){
+  MatchDateTable <- tables %>%
+  # The date is in table 7 
+  .[7] %>%
+  # Create the R dataset from the webpage contents of the specified table
+  html_table() %>%
+  # This is just a thing we need to include, don't ask why
+  .[[1]]
+  # Format the date for easier use in rearranging datasets
+  MatchDate <- str_remove(MatchDateTable[2,2], "[.]") %>%
+    str_remove(",") %>% 
+    as.Date(MatchDate, format = "%b %d %Y")
+  return(MatchDate)
+}
+```
+
+```{r Extract_Player_And_Goalie_Stats}
+# Extract the player and goalie stats for one game and return them in a list
+PlayerGoalieStats <- function(URL){
+  # Extract the HTML Tables
+  HTMLtables <- read_html(URL) %>%
+    html_nodes("table")
+  # Determine if Spruce Grove is home/away
+  Home <- HomeTeam(HTMLtables)
+  # Grab data from correct table
+  # If Spruce Grove is the HOME team
+  if(Home == TRUE){
+    PlayerStats <- HomePlayerStats(HTMLtables)
+    GoalieStats <- HomeGoalieStats(HTMLtables)
+  }
+  # If Spruce Grove is the AWAY team
+  else {
+    PlayerStats <- AwayPlayerStats(HTMLtables)
+    GoalieStats <- AwayGoalieStats(HTMLtables)
+  }
+  MatchDate <- MatchDate(HTMLtables)
+  PlayerStats <- PlayerStats %>%
+    add_column(Date = MatchDate, .after = "Player")
+  GoalieStats <- GoalieStats %>%
+    add_column(Date = MatchDate, .after = "Player")
+  TeamStats <- list(PlayerStats, GoalieStats)
+  return(TeamStats)
+}
+```
+
+```{r Team_Stats}
+# For each URL, grab the data tables for the players and the goalies)
+for (URL in URLList$V1) {
+  # Get the Player and Goalie Stats
+  TeamStats <- PlayerGoalieStats(URL)
+  # If it's the first URL, make the data set with that match's data
+  if (URL == URLList$V1[1]){
+    FullPlayerStats <- TeamStats[[1]]
+    FullGoalieStats <- TeamStats[[2]]
+    next
+  }
+  # For all other matches, combine the new data with the full dataset and keep only the data of players who use HeadSet
+  FullPlayerStats <- bind_rows(FullPlayerStats, TeamStats[[1]])
+  FullPlayerStats <- FullPlayerStats[which(FullPlayerStats$Player %in% PlayerList$Name), ]
+  FullGoalieStats <- bind_rows(FullGoalieStats, TeamStats[[2]])
+  FullGoalieStats <- FullGoalieStats[which(FullGoalieStats$Player %in% PlayerList$Name), ]
+}
+
+# Reorder the tables by player then by date
+FullPlayerStats <- FullPlayerStats %>% 
+  arrange(Player, Date)
+FullGoalieStats <- FullGoalieStats %>% 
+  arrange(Player, Date)
+
+# Export the data tables
+write.csv(FullPlayerStats, file = "SpruceGrovePlayerStats.csv")
+write.csv(FullGoalieStats, file = "SpruceGroveGoalieStats.csv")
+```
